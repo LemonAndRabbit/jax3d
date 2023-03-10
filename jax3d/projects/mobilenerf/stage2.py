@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-scene_type = "synthetic"
-object_name = "chair"
-scene_dir = "datasets/nerf_synthetic/"+object_name
+scene_type = "mvs"
+object_name = "Jade"
+scene_dir = "/data3/dataset_nerf/BlendedMVS/"+object_name
 
 # synthetic
 # chair drums ficus hotdog lego materials mic ship
@@ -71,12 +70,22 @@ def write_floatpoint_image(name,img):
 #%%
 # """ Load dataset """
 
-if scene_type=="synthetic":
+if scene_type=="synthetic" or scene_type=="nsvf" or scene_type=="tanks":
   white_bkgd = True
+  black_bkgd = False
 elif scene_type=="forwardfacing":
   white_bkgd = False
+  black_bkgd = False
 elif scene_type=="real360":
   white_bkgd = False
+  black_bkgd = False
+elif scene_type=="mvs":
+  if object_name in ['Jade', 'Fountain']:
+    white_bkgd = False
+    black_bkgd = True
+  elif object_name in ['Character', 'Statues']:
+    white_bkgd = True
+    black_bkgd = False
 
 
 #https://github.com/google-research/google-research/blob/master/snerg/nerf/datasets.py
@@ -132,6 +141,214 @@ if scene_type=="synthetic":
 
   images, poses, hwf = data['train']['images'], data['train']['c2w'], data['train']['hwf']
   write_floatpoint_image(samples_dir+"/training_image_sample.png",images[0])
+
+  for i in range(3):
+    plt.figure()
+    plt.scatter(poses[:,i,3], poses[:,(i+1)%3,3])
+    plt.axis('equal')
+    plt.savefig(samples_dir+"/training_camera"+str(i)+".png")
+
+elif scene_type=="nsvf":
+  def _parse_pose(cname: str):
+    lines = [[float(w) for w in line.strip().split()] for line in open(cname)]
+    if len(lines[0]) == 2:
+        lines = lines[1:]
+    if len(lines[-1]) == 2:
+        lines = lines[:-1]
+    return np.array(lines).astype(np.float32)
+
+  def load_NSVF(scene_dir: str, split: str):
+    """Load NSVF images from disk."""
+    raw_rgb_path = os.listdir('/'.join([scene_dir, 'rgb']))
+    prefix_split_table = {'train': '0',
+                            'val': '1',
+                          'test': '2',}
+    prefix = prefix_split_table[split]
+    img_names = []
+    for p in raw_rgb_path:
+        if p[0] == prefix:
+            img_names.append(p[:-4])
+
+    images = []
+    camtoworlds = []
+
+    for name in img_names:
+        fname = '/'.join([scene_dir, 'rgb', name + ".png"])
+        rgba = np.array(Image.open(fname), dtype=np.float32) / 255.
+        if rgba.shape[-1] == 3:
+            # deal with Steamtrain which do not have alpha channel
+            rgba = np.pad(rgba, ((0,0),(0,0),(0,1)), constant_values=1.)
+        cname = '/'.join([scene_dir, 'pose', name + ".txt"])
+        c2w = _parse_pose(cname)
+        c2w = c2w * np.array([[1,-1,-1,1],])
+        if white_bkgd:
+          rgb = (rgba[..., :3] * rgba[..., -1:] + (1. - rgba[..., -1:]))
+        else:
+          images = images[..., :3] * images[..., -1:]
+        images.append(rgb)
+        camtoworlds.append(c2w)
+
+    images = np.stack(images, axis=0)
+    camtoworlds = np.stack(camtoworlds, axis=0)
+
+    h, w = images.shape[1:3]
+    focal = 875.
+    hwf = np.array([h, w, focal], dtype=np.float32)
+
+    return {'images' : images, 'c2w' : camtoworlds, 'hwf' : hwf}
+
+  data = {'train' : load_NSVF(scene_dir, 'train'),
+          'test' : load_NSVF(scene_dir, 'test')}
+  
+  splits = ['train', 'test']
+  for s in splits:
+    print(s)
+    for k in data[s]:
+      print(f'  {k}: {data[s][k].shape}')
+
+  images, poses, hwf = data['train']['images'], data['train']['c2w'], data['train']['hwf']
+  write_floatpoint_image(samples_dir+"/training_image_sample.png",images[0])
+
+  for i in range(3):
+    plt.figure()
+    plt.scatter(poses[:,i,3], poses[:,(i+1)%3,3])
+    plt.axis('equal')
+    plt.savefig(samples_dir+"/training_camera"+str(i)+".png")
+
+elif scene_type=="tanks":
+  def _parse_pose(cname: str):
+    lines = [[float(w) for w in line.strip().split()] for line in open(cname)]
+    if len(lines[0]) == 2:
+      lines = lines[1:]
+    if len(lines[-1]) == 2:
+      lines = lines[:-1]
+    return np.array(lines).astype(np.float32)
+
+  def load_TANKS(scene_dir: str, split: str):
+    """Load images from disk."""
+
+    raw_rgb_path = os.listdir('/'.join([scene_dir,'rgb']))
+    prefix_split_table = {'train': '0',
+                          'test': '1',}
+    prefix = prefix_split_table[split]
+    img_names = []
+    for p in raw_rgb_path:
+      if p[0] == prefix:
+        img_names.append(p[:-4])
+
+    images = []
+    camtoworlds = []
+
+    for name in img_names:
+      fname = '/'.join([scene_dir, 'rgb', name + ".png"])
+      # rgba = np.array(Image.open(fname).resize((1920//2, 1080//2), resample=Image.Resampling.BICUBIC), dtype=np.float32) / 255.
+      rgba = np.array(Image.open(fname), dtype=np.float32) / 255.
+      if rgba.shape[-1] == 3:
+        # deal with Steamtrain which do not have alpha channel
+        rgba = np.pad(rgba, ((0,0),(0,0),(0,1)), constant_values=1.)
+      cname = '/'.join([scene_dir, 'pose', name + ".txt"])
+      c2w = _parse_pose(cname)
+      c2w = c2w * np.array([[1,-1,-1,1],])
+      if white_bkgd:
+        rgb = (rgba[..., :3] * rgba[..., -1:] + (1. - rgba[..., -1:]))
+      else:
+        images = images[..., :3] * images[..., -1:]
+      images.append(rgb)
+      camtoworlds.append(c2w)
+
+    images = np.stack(images, axis=0)
+    camtoworlds = np.stack(camtoworlds, axis=0)
+
+    h, w = images.shape[1:3]
+    focal = 1166.564936839068
+    hwf = np.array([h, w, focal], dtype=np.float32)
+
+    return {'images' : images, 'c2w' : camtoworlds, 'hwf' : hwf}
+
+  data = {'train' : load_TANKS(scene_dir, 'train'),
+          'test' : load_TANKS(scene_dir, 'test')}
+  
+  splits = ['train', 'test']
+  for s in splits:
+    print(s)
+    for k in data[s]:
+      print(f'  {k}: {data[s][k].shape}')
+
+  images, poses, hwf = data['train']['images'], data['train']['c2w'], data['train']['hwf']
+  write_floatpoint_image(samples_dir+"/training_image_sample1.png",images[0])
+
+  for i in range(3):
+    plt.figure()
+    plt.scatter(poses[:,i,3], poses[:,(i+1)%3,3])
+    plt.axis('equal')
+    plt.savefig(samples_dir+"/training_camera"+str(i)+".png")
+
+elif scene_type=="mvs":
+  def _parse_pose(cname: str):
+    lines = [[float(w) for w in line.strip().split()] for line in open(cname)]
+    if len(lines[0]) == 2:
+        lines = lines[1:]
+    if len(lines[-1]) == 2:
+        lines = lines[:-1]
+    return np.array(lines).astype(np.float32)
+
+  def load_MVS(scene_dir: str, split: str):
+    raw_rgb_path = os.listdir('/'.join([scene_dir,'rgb']))
+    prefix_split_table = {'train': '0',
+                          'test': '1',}
+    prefix = prefix_split_table[split]
+    img_names = []
+    for p in raw_rgb_path:
+      if p[0] == prefix:
+        img_names.append(p[:-4])
+
+    images = []
+    camtoworlds = []
+
+    for name in img_names:
+      fname = '/'.join([scene_dir, 'rgb', name + ".png"])
+      # rgba = np.array(Image.open(fname).resize((1920//2, 1080//2), resample=Image.Resampling.BICUBIC), dtype=np.float32) / 255.
+      rgba = np.array(Image.open(fname), dtype=np.float32) / 255.
+      if rgba.shape[-1] == 3:
+        # deal with Steamtrain which do not have alpha channel
+        rgba = np.pad(rgba, ((0,0),(0,0),(0,1)), constant_values=1.)
+      cname = '/'.join([scene_dir, 'pose', name + ".txt"])
+      c2w = _parse_pose(cname)
+      c2w = c2w * np.array([[1,-1,-1,1],])
+      if white_bkgd:
+        rgb = (rgba[..., :3] * rgba[..., -1:] + (1. - rgba[..., -1:]))
+      else:
+        rgb = rgba[..., :3] * rgba[..., -1:]
+      images.append(rgb)
+      camtoworlds.append(c2w)
+
+    images = np.stack(images, axis=0)
+    camtoworlds = np.stack(camtoworlds, axis=0)
+
+    h, w = images.shape[1:3]
+    if object_name == "Character":
+      focal = 669.919
+    elif object_name == "Fountain":
+      focal = 1517.63625
+    elif object_name == "Jade":
+      focal = 2903.84625
+    elif object_name == "Statues":
+      focal = 628.583
+    hwf = np.array([h, w, focal], dtype=np.float32)
+
+    return {'images' : images, 'c2w' : camtoworlds, 'hwf' : hwf}
+
+  data = {'train' : load_MVS(scene_dir, 'train'),
+          'test' : load_MVS(scene_dir, 'test')}
+  
+  splits = ['train', 'test']
+  for s in splits:
+    print(s)
+    for k in data[s]:
+      print(f'  {k}: {data[s][k].shape}')
+
+  images, poses, hwf = data['train']['images'], data['train']['c2w'], data['train']['hwf']
+  write_floatpoint_image(samples_dir+"/training_image_sample1.png",images[0])
 
   for i in range(3):
     plt.figure()
@@ -462,6 +679,22 @@ if scene_type=="synthetic":
   def inverse_taper_coord(p):
     return p
 
+elif scene_type=="nsvf" or scene_type=="tanks" or scene_type=="mvs":
+
+  aabb_path = '/'.join([scene_dir, 'bbox.txt'])
+  with open(aabb_path, 'r') as f:
+      line = f.readline()
+      aabb = [float(w) for w in line.strip().split()][:-1]
+
+  grid_min = np.array(aabb[:3])
+  grid_max = np.array(aabb[3:])
+  point_grid_size = 128
+
+  def get_taper_coord(p):
+    return p
+  def inverse_taper_coord(p):
+    return p
+
 elif scene_type=="forwardfacing":
   scene_grid_taper = 1.25
   scene_grid_zstart = 25.0
@@ -544,7 +777,7 @@ def get_acc_grid_masks(taper_positions, acc_grid):
 
 #compute ray-gridcell intersections
 
-if scene_type=="synthetic":
+if scene_type=="synthetic" or scene_type=="nsvf" or scene_type=="tanks" or scene_type=="mvs":
 
   def gridcell_from_rays(rays, acc_grid, keep_num, threshold):
     ray_origins = rays[0]
@@ -1382,6 +1615,9 @@ def render_rays(rays, vars, keep_num, threshold, wbgcolor, rng): ### antialiasin
   if white_bkgd:
     rgb = rgb * acc[..., None] + (1. - acc[..., None])
     rgb_b = rgb_b * acc_b[..., None] + (1. - acc_b[..., None])
+  elif black_bkgd:
+    rgb = rgb * acc[..., None]
+    rgb_b = rgb_b * acc_b[..., None]
   else:
     bgc = random.randint(rng, [1], 0, 2).astype(bg_color.dtype) * wbgcolor + \
           bg_color * (1-wbgcolor)
@@ -1396,7 +1632,8 @@ def render_rays(rays, vars, keep_num, threshold, wbgcolor, rng): ### antialiasin
 #%% --------------------------------------------------------------------------------
 # ## Set up pmap'd rendering for test time evaluation.
 #%%
-test_batch_size = 256*n_device
+# test_batch_size = 256*n_device
+test_batch_size = 128*n_device
 test_keep_num = point_grid_size*3//4
 test_threshold = 0.1
 test_wbgcolor = 0.0
@@ -1430,7 +1667,7 @@ def render_loop(rays, vars, chunk): ### antialiasing by supersampling
 
 # Make sure that everything works, by rendering an image from the test set
 
-if scene_type=="synthetic":
+if scene_type=="synthetic" or scene_type=="nsvf" or scene_type=="tanks" or scene_type=="mvs":
   selected_test_index = 97
   preview_image_height = 800
 
@@ -1551,7 +1788,7 @@ for i in tqdm(range(step_init, training_iters + 1)):
   wbinary = float(i)/training_iters
   wbgcolor = 1.0
 
-  if scene_type=="synthetic":
+  if scene_type=="synthetic" or scene_type=="nsvf" or scene_type=="tanks" or scene_type=="mvs":
     wdistortion = 0.0
   elif scene_type=="forwardfacing":
     wdistortion = 0.01
@@ -1796,6 +2033,8 @@ def render_rays(rays, vars, keep_num, threshold, wbgcolor, rng): ### antialiasin
   # Composite onto the background color.
   if white_bkgd:
     rgb_b = rgb_b * acc_b[..., None] + (1. - acc_b[..., None])
+  elif black_bkgd:
+    rgb_b = rgb_b * acc_b[..., None]
   else:
     bgc = random.randint(rng, [1], 0, 2).astype(bg_color.dtype) * wbgcolor + \
           bg_color * (1-wbgcolor)
@@ -1805,7 +2044,8 @@ def render_rays(rays, vars, keep_num, threshold, wbgcolor, rng): ### antialiasin
 #%% --------------------------------------------------------------------------------
 # ## Set up pmap'd rendering for test time evaluation.
 #%%
-test_batch_size = 256*n_device
+# test_batch_size = 256*n_device
+test_batch_size = 128*n_device
 test_keep_num = point_grid_size*3//4
 test_threshold = 0.1
 test_wbgcolor = 0.0
@@ -1839,9 +2079,17 @@ def render_loop(rays, vars, chunk): ### antialiasing by supersampling
 
 # Make sure that everything works, by rendering an image from the test set
 
-if scene_type=="synthetic":
+if scene_type=="synthetic" or scene_type=="nsvf":
   selected_test_index = 97
   preview_image_height = 800
+
+elif scene_type=="tanks":
+  selected_test_index = 10
+  preview_image_height = 1080
+
+elif scene_type=="mvs":
+  selected_test_index = 10
+  preview_image_height = 576
 
 elif scene_type=="forwardfacing":
   selected_test_index = 0
@@ -1919,7 +2167,7 @@ for i in tqdm(range(step_init, training_iters + 1)):
   wbinary = 0.5
   wbgcolor = 1.0
 
-  if scene_type=="synthetic":
+  if scene_type=="synthetic" or scene_type=="nsvf" or scene_type=="tanks" or scene_type=="mvs":
     wdistortion = 0.0
   elif scene_type=="forwardfacing":
     wdistortion = 0.01
